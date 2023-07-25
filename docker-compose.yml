@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  client:
+    image: warframe-message-notifier-client
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: warframe-message-notifier-client
+    env_file: .env
+    environment:
+      - API_BASE_URL=http://host.docker.internal:8080
+      - WF_EE_LOG_FILE_PATH=/tmp/warframe/EE.log
+    volumes:
+      - ${WF_EE_LOG_FILE_PATH}:/tmp/warframe/EE.log
+    ports:
+      - 8081:8081
+    restart: on-failure
+
+  server:
+    image: warframe-message-notifier-server
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: warframe-message-notifier-server
+    env_file: .env
+    environment:
+      - CLIENT_API_BASE_URL=http://localhost:8081
+      - DISCORD_BOT_REDIRECT_URI=http://localhost:8080/api/v1/discord/authorize/callback
+    ports:
+      - 8080:8080
+    restart: on-failure

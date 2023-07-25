@@ -1,0 +1,10 @@
+.DS_Store
+.vs
+.vscode/
+
+# Environment
+.env*
+!.env.example
+
+# Log file for testing
+test.log
