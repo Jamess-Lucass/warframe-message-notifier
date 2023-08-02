@@ -3,6 +3,8 @@ name: Build and push Client Docker image
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - "client/**"
 
 env:
   REGISTRY: ghcr.io
@@ -39,3 +41,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            API_BASE_URL=${{ vars.API_BASE_URL }}

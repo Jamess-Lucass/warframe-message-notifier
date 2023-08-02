@@ -3,6 +3,8 @@ name: Build and push Server Docker image
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - "server/**"
 
 env:
   REGISTRY: ghcr.io
