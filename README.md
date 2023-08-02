@@ -12,7 +12,7 @@ After running the client, you'll be asked to authenticate with Discord, this is 
 
 When you receive a new message in game, it creates a new tab within the chat window, this event is logged inside the EE.log file, we can utilize this to detect new in-game messages, this means, you'll only receieve a Discord DM if it's a new DM, if a message is received inside an already existing tab in the chat window, it will not be logged and thus, won't be picked up.
 
-It only logs that a new tab was added to the chat window with the title of the tab, which happens to be the username, and this is how we can extract the username, the message content is not logged to file, so we can only notify that someone send you an in-game message.
+It only logs that a new tab was added to the chat window with the title of the tab, which happens to be the username, and this is how we can extract the username, the message content is not logged to file, so we can only notify that someone sent you an in-game message.
 
 ## Prerequisites
 
@@ -55,3 +55,13 @@ _Coming soon..._
    > You need to authenticate with discord so the application knows who to send the Discord DM to.
 
 2. Wait to receive a direct message in game and you'll be sent a direct message on Discord notifying you :)
+
+## Updating
+
+### Docker
+
+1. Pull the latest image
+
+   ```bash
+   docker pull ghcr.io/jamess-lucass/warframe-message-notifier-client:main
+   ```
