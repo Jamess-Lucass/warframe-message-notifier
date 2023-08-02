@@ -3,7 +3,7 @@ name: Build and push Client Docker image
 on:
   push:
     branches: ["main"]
-    paths-ignore:
+    paths:
       - "client/**"
 
 env:
