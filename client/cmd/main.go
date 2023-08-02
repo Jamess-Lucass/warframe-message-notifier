@@ -62,7 +62,11 @@ func main() {
 	}
 	defer file.Close()
 
-	fmt.Printf("Please authenticate with discord via: %s/api/v1/discord/authorize\n", apiBaseUrl)
+	// We want to replace 'host.docker.internal' with localhost as the user needs to navigate to this
+	// outside of the container, accessing host.docker.internal on the host machine will not work.
+	// We need to keep this value as 'host.docker.internal' for the rest of the program,
+	// as this is used for http requests from inside the contianer.
+	fmt.Printf("Please authenticate with discord via: %s/api/v1/discord/authorize\n", strings.ReplaceAll(apiBaseUrl, "host.docker.internal", "localhost"))
 
 	// Wait for user to authenticate with discord
 	for discordBearerToken == "" {
