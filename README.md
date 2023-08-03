@@ -28,7 +28,7 @@ It only logs that a new tab was added to the chat window with the title of the t
 
 1. Run the Docker container.
 
-> Run the below commands whether you are running the container from the default Windows Command Prompt or from Powershell, they both have different environment variables to access your local app data, that is the only difference between the commands. It has to run on port 8081 and the volume path is for the EE.log file, for the majority of users, this will be what is in the commands below.
+   > Run the below commands whether you are running the container from the default Windows Command Prompt or from Powershell, they both have different environment variables to access your local app data, that is the only difference between the commands. It has to run on port 8081 and the volume path is for the EE.log file, for the majority of users, this will be what is in the commands below.
 
 - Powershell
 
@@ -44,7 +44,23 @@ It only logs that a new tab was added to the chat window with the title of the t
 
 ### From executable
 
-_Coming soon..._
+1. Download the executable from your desired release version [here](https://github.com/Jamess-Lucass/warframe-message-notifier/releases)
+
+2. Run the executable.
+
+   > You will need to set the environment variable `WF_EE_LOG_FILE_PATH` so the app knows what log file to read.
+
+- Powershell
+
+  ```bash
+  $env:WF_EE_LOG_FILE_PATH="$env:LocalAppData/Warframe/EE.log"; .\warframe-message-notifier.exe
+  ```
+
+- Command Prompt
+
+  ```bash
+  set "WF_EE_LOG_FILE_PATH=%LOCALAPPDATA%/Warframe/EE.log" && warframe-message-notifier.exe
+  ```
 
 ## How to use
 
@@ -65,3 +81,9 @@ _Coming soon..._
    ```bash
    docker pull ghcr.io/jamess-lucass/warframe-message-notifier-client:main
    ```
+
+### Executable
+
+1. Download the new release version for your operating system.
+
+2. Run the new version following the [From executable](#from-executable) section.
