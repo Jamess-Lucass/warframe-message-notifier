@@ -25,7 +25,7 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-var apiBaseUrl = os.Getenv("API_BASE_URL")
+var apiBaseUrl string
 
 /*
 This is the regex for detecting the event in which the a tab is added to the chat window.
@@ -38,6 +38,13 @@ var discordBearerToken = ""
 
 func main() {
 	fmt.Println("Starting!")
+
+	// This is added because when we use 'go build' we inject a build-time variable into apiBaseUrl
+	// so it won't be empty string, however, when using docker, we want to get this from the
+	// environment variable
+	if apiBaseUrl == "" {
+		apiBaseUrl = os.Getenv("API_BASE_URL")
+	}
 
 	http.HandleFunc("/api/v1/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		discordBearerToken = r.URL.Query().Get("token")
