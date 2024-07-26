@@ -1,5 +1,8 @@
 # warframe-message-notifier
 
+> [!IMPORTANT]  
+> The server used to host the discord bot is no longer running. You will not receive any discord messages. You may however create your own discord bot and reuse the server code.
+
 This project will detect direct messages from users in Warframe, then send a Discord DM notifying you.
 
 ## Motiviation
