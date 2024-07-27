@@ -3,7 +3,7 @@ module github.com/Jamess-Lucass/warframe-message-notifier/server
 go 1.20
 
 require (
-	github.com/bwmarrin/discordgo v0.27.1
+	github.com/bwmarrin/discordgo v0.28.1
 	github.com/go-playground/validator/v10 v10.22.0
 	github.com/gofiber/contrib/fiberzap v1.0.2
 	github.com/gofiber/fiber/v2 v2.48.0
