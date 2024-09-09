@@ -8,7 +8,7 @@ require (
 	github.com/gofiber/contrib/fiberzap v1.0.2
 	github.com/gofiber/fiber/v2 v2.52.5
 	go.uber.org/zap v1.27.0
-	golang.org/x/oauth2 v0.22.0
+	golang.org/x/oauth2 v0.23.0
 )
 
 require (
