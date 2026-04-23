@@ -3,7 +3,7 @@ module github.com/Jamess-Lucass/warframe-message-notifier/server
 go 1.25.0
 
 require (
-	github.com/bwmarrin/discordgo v0.28.1
+	github.com/bwmarrin/discordgo v0.29.0
 	github.com/go-playground/validator/v10 v10.30.2
 	golang.org/x/oauth2 v0.36.0
 )
