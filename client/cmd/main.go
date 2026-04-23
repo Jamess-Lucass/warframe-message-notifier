@@ -34,9 +34,6 @@ type TokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// tokenState holds the current token and tracks when it actually expires.
-// ExpiresIn from Discord is a snapshot in seconds; we convert it to an
-// absolute time so we can check validity later.
 type tokenState struct {
 	AccessToken  string
 	RefreshToken string
@@ -51,7 +48,6 @@ func newTokenState(resp *TokenResponse) *tokenState {
 	}
 }
 
-// needsRefresh returns true if the token expires within the next 60 seconds.
 func (t *tokenState) needsRefresh() bool {
 	return time.Until(t.ExpiresAt) < 60*time.Second
 }
@@ -62,7 +58,6 @@ var apiBaseUrl string
 // DE prepends 'F' to the username for player direct messages.
 var chatTabRegex = regexp.MustCompile(`(Script \[Info\]: ChatRedux\.lua: ChatRedux::AddTab: Adding tab with channel name: F)(.+)( to index.+)`)
 
-// httpClient is reused across requests with a reasonable timeout.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 func main() {
@@ -88,9 +83,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Channel to receive the token from the OAuth callback handler.
-	// Replaces the old global variable + busy-wait polling pattern,
-	// eliminating the data race and CPU-wasting spin loop.
 	tokenCh := make(chan *TokenResponse, 1)
 
 	mux := http.NewServeMux()
@@ -208,8 +200,6 @@ func shutdownServer(server *http.Server) {
 	}
 }
 
-// postJSON marshals body as JSON, POSTs it to the given URL, and decodes
-// the response into a TokenResponse.
 func postJSON(url string, body any) (*TokenResponse, error) {
 	data, err := json.Marshal(body)
 	if err != nil {

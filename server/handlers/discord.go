@@ -3,13 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/oauth2"
 )
 
 type ErrorResponse struct {
@@ -17,29 +17,25 @@ type ErrorResponse struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content string `json:"content"`
+	Content string `json:"content" validate:"required,max=2000"`
 }
 
 type ExchangeAuthCodeRequest struct {
-	Code string `json:"code"`
+	Code string `json:"code" validate:"required"`
 }
 
 type RefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refresh_token" validate:"required"`
 }
 
-// writeJSON writes a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		// Best effort -- if we can't write the response, log and move on.
-		// The status code has already been sent at this point.
 		slog.Default().Error("failed to write JSON response", "error", err)
 	}
 }
 
-// writeError writes a JSON error response.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{Message: msg})
 }
@@ -49,22 +45,13 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 //
 // Discord OAuth2 docs: https://docs.discord.com/developers/topics/oauth2#authorization-code-grant
 func (s *Server) Authorize(w http.ResponseWriter, r *http.Request) {
-	params := url.Values{
-		"client_id":     {s.oauthConfig.ClientID},
-		"scope":         {"identify"},
-		"redirect_uri":  {s.oauthConfig.RedirectURL},
-		"response_type": {"code"},
-		"prompt":        {"consent"},
-	}
-
-	redirectURL := fmt.Sprintf("%s?%s", s.oauthConfig.AuthURL, params.Encode())
+	redirectURL := s.oauthConfig.AuthCodeURL("", oauth2.SetAuthURLParam("prompt", "consent"))
 	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
 // AuthorizeCallback handles the redirect from Discord after user authorization.
-// It exchanges the authorization code for tokens via POST to
-// https://discord.com/api/oauth2/token, stores the token behind a short-lived
-// auth code, and redirects to the client with that code.
+// It exchanges the authorization code for tokens via the oauth2 package, stores
+// the token behind a short-lived auth code, and redirects to the client.
 //
 // Discord OAuth2 docs: https://docs.discord.com/developers/topics/oauth2#authorization-code-grant
 func (s *Server) AuthorizeCallback(w http.ResponseWriter, r *http.Request) {
@@ -74,11 +61,21 @@ func (s *Server) AuthorizeCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.exchangeCodeForToken(code)
+	// Exchange the Discord authorization code for access + refresh tokens.
+	// The oauth2 package handles the POST to https://discord.com/api/oauth2/token
+	// with grant_type=authorization_code, code, redirect_uri, client_id, client_secret.
+	oauthToken, err := s.oauthConfig.Exchange(r.Context(), code)
 	if err != nil {
 		s.logger.Error("failed to exchange authorization code for token", "error", err)
 		writeError(w, http.StatusInternalServerError, "Failed to exchange authorization code")
 		return
+	}
+
+	token := &TokenResponse{
+		AccessToken:  oauthToken.AccessToken,
+		TokenType:    oauthToken.TokenType,
+		ExpiresIn:    int64(time.Until(oauthToken.Expiry).Seconds()),
+		RefreshToken: oauthToken.RefreshToken,
 	}
 
 	// Generate a short-lived auth code so we don't pass the Discord access token
@@ -115,8 +112,8 @@ func (s *Server) ExchangeAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Code == "" {
-		writeError(w, http.StatusBadRequest, "code is required")
+	if err := s.validator.Struct(request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -136,7 +133,8 @@ func (s *Server) ExchangeAuthCode(w http.ResponseWriter, r *http.Request) {
 }
 
 // RefreshToken exchanges a Discord refresh token for a new access token.
-// Calls POST https://discord.com/api/oauth2/token with grant_type=refresh_token.
+// Uses the oauth2 package's TokenSource to handle the refresh via
+// POST https://discord.com/api/oauth2/token with grant_type=refresh_token.
 //
 // Discord OAuth2 docs: https://docs.discord.com/developers/topics/oauth2#authorization-code-grant-refresh-token-exchange-example
 func (s *Server) RefreshToken(w http.ResponseWriter, r *http.Request) {
@@ -146,19 +144,30 @@ func (s *Server) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.RefreshToken == "" {
-		writeError(w, http.StatusBadRequest, "refresh_token is required")
+	if err := s.validator.Struct(request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	token, err := s.refreshDiscordToken(request.RefreshToken)
+	// Create an expired token with the refresh token set so that
+	// TokenSource automatically triggers a refresh.
+	expiredToken := &oauth2.Token{
+		RefreshToken: request.RefreshToken,
+	}
+
+	newToken, err := s.oauthConfig.TokenSource(r.Context(), expiredToken).Token()
 	if err != nil {
 		s.logger.Error("failed to refresh token", "error", err)
 		writeError(w, http.StatusUnauthorized, "Failed to refresh token")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, token)
+	writeJSON(w, http.StatusOK, TokenResponse{
+		AccessToken:  newToken.AccessToken,
+		TokenType:    newToken.TokenType,
+		ExpiresIn:    int64(time.Until(newToken.Expiry).Seconds()),
+		RefreshToken: newToken.RefreshToken,
+	})
 }
 
 // SendChannelMessage sends a DM to the authenticated Discord user via the bot.
@@ -171,13 +180,8 @@ func (s *Server) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Content == "" {
-		writeError(w, http.StatusBadRequest, "content is required")
-		return
-	}
-
-	if len(request.Content) > 2000 {
-		writeError(w, http.StatusBadRequest, "content must be 2000 characters or less")
+	if err := s.validator.Struct(request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -209,57 +213,4 @@ func (s *Server) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("Sent Discord DM", "user_id", user.ID)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// exchangeCodeForToken exchanges a Discord authorization code for access + refresh tokens.
-// POST https://discord.com/api/oauth2/token with Content-Type: application/x-www-form-urlencoded
-func (s *Server) exchangeCodeForToken(code string) (*TokenResponse, error) {
-	return s.postTokenRequest(url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {s.oauthConfig.RedirectURL},
-		"client_id":     {s.oauthConfig.ClientID},
-		"client_secret": {s.oauthConfig.ClientSecret},
-	})
-}
-
-// refreshDiscordToken exchanges a refresh token for a new access token.
-// POST https://discord.com/api/oauth2/token with Content-Type: application/x-www-form-urlencoded
-func (s *Server) refreshDiscordToken(refreshToken string) (*TokenResponse, error) {
-	return s.postTokenRequest(url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
-		"client_id":     {s.oauthConfig.ClientID},
-		"client_secret": {s.oauthConfig.ClientSecret},
-	})
-}
-
-// postTokenRequest sends a form-encoded POST to Discord's token endpoint
-// and returns the parsed token response.
-func (s *Server) postTokenRequest(data url.Values) (*TokenResponse, error) {
-	resp, err := http.PostForm(s.oauthConfig.TokenURL, data)
-	if err != nil {
-		return nil, fmt.Errorf("token request failed: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			s.logger.Error("failed to close response body", "error", err)
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	token := TokenResponse{}
-	if err := json.Unmarshal(body, &token); err != nil {
-		return nil, fmt.Errorf("failed to parse token response: %w", err)
-	}
-
-	return &token, nil
 }

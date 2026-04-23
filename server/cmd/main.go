@@ -10,6 +10,7 @@ import (
 
 	"github.com/Jamess-Lucass/warframe-message-notifier/server/handlers"
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -27,16 +28,16 @@ func run() error {
 		return fmt.Errorf("unable to create discord client: %w", err)
 	}
 
-	// OAuth2 config using the canonical Discord OAuth2 URLs:
-	// Auth:  https://discord.com/oauth2/authorize
-	// Token: https://discord.com/api/oauth2/token
-	// See: https://docs.discord.com/developers/topics/oauth2#shared-resources-oauth2-urls
-	oauthConfig := &handlers.OAuthConfig{
+	oauthConfig := &oauth2.Config{
 		ClientID:     os.Getenv("DISCORD_BOT_CLIENT_ID"),
 		ClientSecret: os.Getenv("DISCORD_BOT_CLIENT_SECRET"),
 		RedirectURL:  os.Getenv("DISCORD_BOT_REDIRECT_URI"),
-		AuthURL:      "https://discord.com/oauth2/authorize",
-		TokenURL:     "https://discord.com/api/oauth2/token",
+		Scopes:       []string{"identify"},
+		Endpoint: oauth2.Endpoint{
+			AuthURL:   "https://discord.com/oauth2/authorize",
+			TokenURL:  "https://discord.com/api/oauth2/token",
+			AuthStyle: oauth2.AuthStyleInParams,
+		},
 	}
 
 	clientBaseURL := os.Getenv("CLIENT_API_BASE_URL")

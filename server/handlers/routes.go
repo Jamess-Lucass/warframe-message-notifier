@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// loggingMiddleware wraps an http.Handler with structured request logging.
 func loggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -24,14 +23,11 @@ func loggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// Discord OAuth2 Authorization Code Grant flow
 	mux.HandleFunc("GET /api/v1/discord/authorize", s.Authorize)
 	mux.HandleFunc("GET /api/v1/discord/authorize/callback", s.AuthorizeCallback)
 
-	// Auth code exchange: client trades short-lived code for Discord tokens
 	mux.HandleFunc("POST /api/v1/oauth/exchange", s.ExchangeAuthCode)
 
-	// Token refresh: client sends refresh_token, gets new access_token
 	mux.HandleFunc("POST /api/v1/oauth/refresh", s.RefreshToken)
 
 	// Send DM via bot
