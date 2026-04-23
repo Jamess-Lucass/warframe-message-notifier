@@ -33,4 +33,3 @@ jobs:
           goversion: "1.26"
           project_path: "./client/cmd"
           binary_name: "warframe-message-notifier"
-          ldflags: -X "main.apiBaseUrl=${{ vars.API_BASE_URL }}"
