@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/go-playground/validator/v10"
 )
 
 type SendChannelMessageRequest struct {
@@ -52,7 +54,23 @@ func (t *tokenState) needsRefresh() bool {
 	return time.Until(t.ExpiresAt) < 60*time.Second
 }
 
-var apiBaseUrl string
+type config struct {
+	APIBaseURL string `validate:"required"`
+	EELogPath  string `validate:"required"`
+}
+
+func loadConfig() (*config, error) {
+	cfg := &config{
+		APIBaseURL: os.Getenv("API_BASE_URL"),
+		EELogPath:  os.Getenv("WF_EE_LOG_FILE_PATH"),
+	}
+
+	if err := validator.New().Struct(cfg); err != nil {
+		return nil, fmt.Errorf("missing required environment variables: %w", err)
+	}
+
+	return cfg, nil
+}
 
 // Regex for detecting the event when a tab is added to the chat window.
 // DE prepends 'F' to the username for player direct messages.
@@ -69,15 +87,9 @@ func main() {
 func run() error {
 	log.Println("Starting!")
 
-	// When using 'go build' we inject apiBaseUrl via -ldflags -X.
-	// When using Docker, we read from the environment variable.
-	if apiBaseUrl == "" {
-		apiBaseUrl = os.Getenv("API_BASE_URL")
-	}
-
-	eeLogPath := os.Getenv("WF_EE_LOG_FILE_PATH")
-	if eeLogPath == "" {
-		return fmt.Errorf("environment variable 'WF_EE_LOG_FILE_PATH' is not set")
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -93,7 +105,7 @@ func run() error {
 			return
 		}
 
-		token, err := exchangeAuthCode(code)
+		token, err := exchangeAuthCode(cfg.APIBaseURL, code)
 		if err != nil {
 			log.Printf("failed to exchange auth code: %v", err)
 			http.Error(w, "Failed to exchange auth code", http.StatusInternalServerError)
@@ -120,7 +132,7 @@ func run() error {
 
 	// Replace 'host.docker.internal' with 'localhost' for display only --
 	// the user accesses this from the host machine, not inside the container.
-	displayURL := strings.ReplaceAll(apiBaseUrl, "host.docker.internal", "localhost")
+	displayURL := strings.ReplaceAll(cfg.APIBaseURL, "host.docker.internal", "localhost")
 	log.Printf("Please authenticate with Discord via: %s/api/v1/discord/authorize", displayURL)
 
 	// Block until we receive a token or the context is cancelled.
@@ -135,7 +147,7 @@ func run() error {
 		return nil
 	}
 
-	file, err := os.Open(eeLogPath)
+	file, err := os.Open(cfg.EELogPath)
 	if err != nil {
 		return fmt.Errorf("error opening file: %w", err)
 	}
@@ -177,7 +189,7 @@ func run() error {
 
 			if token.needsRefresh() {
 				log.Println("Access token expiring soon, refreshing...")
-				resp, err := refreshToken(token.RefreshToken)
+				resp, err := refreshToken(cfg.APIBaseURL, token.RefreshToken)
 				if err != nil {
 					log.Printf("failed to refresh token: %v", err)
 					continue
@@ -185,7 +197,7 @@ func run() error {
 				token = newTokenState(resp)
 			}
 
-			if err := sendDiscordMessage(token.AccessToken, username); err != nil {
+			if err := sendDiscordMessage(cfg.APIBaseURL, token.AccessToken, username); err != nil {
 				log.Printf("error sending Discord message: %v", err)
 			}
 		}
@@ -232,12 +244,12 @@ func postJSON(url string, body any) (*TokenResponse, error) {
 	return &tokenResp, nil
 }
 
-func exchangeAuthCode(code string) (*TokenResponse, error) {
+func exchangeAuthCode(apiBaseUrl, code string) (*TokenResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/oauth/exchange", apiBaseUrl)
 	return postJSON(url, map[string]string{"code": code})
 }
 
-func refreshToken(refreshTok string) (*TokenResponse, error) {
+func refreshToken(apiBaseUrl, refreshTok string) (*TokenResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/oauth/refresh", apiBaseUrl)
 	return postJSON(url, map[string]string{"refresh_token": refreshTok})
 }
@@ -251,7 +263,7 @@ func removeNonPrintableCharacters(val string) string {
 	}, val)
 }
 
-func sendDiscordMessage(accessToken string, username string) error {
+func sendDiscordMessage(apiBaseUrl, accessToken, username string) error {
 	content := SendChannelMessageRequest{
 		Content: fmt.Sprintf("You received a new direct message from __**%s**__", username),
 	}

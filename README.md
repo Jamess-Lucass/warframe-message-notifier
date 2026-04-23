@@ -5,7 +5,7 @@
 
 This project will detect direct messages from users in Warframe, then send a Discord DM notifying you.
 
-## Motiviation
+## Motivation
 
 Warframe has a trading feature, which is only made better by a third-party website named Warframe Market, which allows people to list WTS and WTB offers on their site, you can look who is selling what, at what price, then message them in game and perform the trade. However, if you're just in the mood to trade, you may sit there, waiting for messages in game, instead, you may want to go and do something else, minimize the app, play another game, watch netflix etc, many reasons for you to miss an in-game message unless you're constantly looking at the game, well, no more.
 
@@ -13,7 +13,7 @@ Warframe has a trading feature, which is only made better by a third-party websi
 
 After running the client, you'll be asked to authenticate with Discord, this is to know what Discord user to send a DM to. After successfully authenticating, the application reads the Warframe EE.log file and when it detects a log entry for a in-game message, it will parse that line, extract the username, then send a request to the server, which will send you a Discord DM from the Bot.
 
-When you receive a new message in game, it creates a new tab within the chat window, this event is logged inside the EE.log file, we can utilize this to detect new in-game messages, this means, you'll only receieve a Discord DM if it's a new DM, if a message is received inside an already existing tab in the chat window, it will not be logged and thus, won't be picked up.
+When you receive a new message in game, it creates a new tab within the chat window, this event is logged inside the EE.log file, we can utilize this to detect new in-game messages, this means, you'll only receive a Discord DM if it's a new DM, if a message is received inside an already existing tab in the chat window, it will not be logged and thus, won't be picked up.
 
 It only logs that a new tab was added to the chat window with the title of the tab, which happens to be the username, and this is how we can extract the username, the message content is not logged to file, so we can only notify that someone sent you an in-game message.
 
