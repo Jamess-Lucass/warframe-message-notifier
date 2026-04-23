@@ -1,3 +1,3 @@
 module github.com/Jamess-Lucass/warframe-message-notifier/client
 
-go 1.24.0
+go 1.26.0
