@@ -1,0 +1,24 @@
+name: Docker Build
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build client Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./client
+          push: false
+
+      - name: Build server Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./server
+          push: false

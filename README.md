@@ -1,92 +1,125 @@
 # warframe-message-notifier
 
 > [!IMPORTANT]  
-> The server used to host the discord bot is no longer running. You will not receive any discord messages. You may however create your own discord bot and reuse the server code.
+> The server used to host the Discord bot is no longer running. You may however create your own Discord bot and self-host both the client and server.
 
-This project will detect direct messages from users in Warframe, then send a Discord DM notifying you.
+This project detects direct messages from users in Warframe and sends you a Discord DM notification.
 
-## Motiviation
+## Motivation
 
-Warframe has a trading feature, which is only made better by a third-party website named Warframe Market, which allows people to list WTS and WTB offers on their site, you can look who is selling what, at what price, then message them in game and perform the trade. However, if you're just in the mood to trade, you may sit there, waiting for messages in game, instead, you may want to go and do something else, minimize the app, play another game, watch netflix etc, many reasons for you to miss an in-game message unless you're constantly looking at the game, well, no more.
+Warframe has a trading feature enhanced by [Warframe Market](https://warframe.market/), a third-party site where players list buy and sell offers. You can find a seller, message them in-game, and perform the trade. But if you're waiting for messages, you might want to minimize the game, play something else, or watch Netflix. Without constantly watching the game, you'd miss incoming messages — this project solves that.
 
 ## How it works
 
-After running the client, you'll be asked to authenticate with Discord, this is to know what Discord user to send a DM to. After successfully authenticating, the application reads the Warframe EE.log file and when it detects a log entry for a in-game message, it will parse that line, extract the username, then send a request to the server, which will send you a Discord DM from the Bot.
+When you receive a new direct message in-game, Warframe creates a new tab in the chat window. This event is logged in the `EE.log` file. The client watches this log file, detects new chat tabs, extracts the sender's username, and sends a request to the server. The server then sends you a Discord DM via the bot.
 
-When you receive a new message in game, it creates a new tab within the chat window, this event is logged inside the EE.log file, we can utilize this to detect new in-game messages, this means, you'll only receieve a Discord DM if it's a new DM, if a message is received inside an already existing tab in the chat window, it will not be logged and thus, won't be picked up.
-
-It only logs that a new tab was added to the chat window with the title of the tab, which happens to be the username, and this is how we can extract the username, the message content is not logged to file, so we can only notify that someone sent you an in-game message.
+You'll only be notified for new conversations. If a message arrives in an already open chat tab, it won't be logged and won't trigger a notification. Only the username is captured — message content is not logged by Warframe.
 
 ## Prerequisites
 
-- You must have at least one mutual server with the Discord bot.
-
-> You may invite the Discord bot to a server you have permission to with this link [https://discord.com/oauth2/authorize?client_id=1132776281474355271&permissions=0&scope=bot](https://discord.com/oauth2/authorize?client_id=1132776281474355271&permissions=0&scope=bot)
+- A [Discord application](https://discord.com/developers/applications) with a bot
+- The bot token, client ID, and client secret from your Discord application
+- An OAuth2 redirect URI set to `http://localhost:8080/api/v1/discord/authorize/callback` in your Discord application
+- At least one mutual server between your Discord account and the bot
 
 ## Setup
 
-### From Docker
+### 1. Configure environment variables
 
-> The below assumes you have Docker installed and have a basic understanding of it.
+```bash
+cp .env.example .env
+```
 
-1. Run the Docker container.
+Fill in the `.env` file:
 
-   > Run the below commands whether you are running the container from the default Windows Command Prompt or from Powershell, they both have different environment variables to access your local app data, that is the only difference between the commands. It has to run on port 8081 and the volume path is for the EE.log file, for the majority of users, this will be what is in the commands below.
+| Variable | Description |
+|---|---|
+| `DISCORD_BOT_TOKEN` | Your Discord bot token |
+| `DISCORD_BOT_CLIENT_ID` | Your Discord application client ID |
+| `DISCORD_BOT_CLIENT_SECRET` | Your Discord application client secret |
+| `DISCORD_BOT_REDIRECT_URI` | `http://localhost:8080/api/v1/discord/authorize/callback` |
+| `CLIENT_API_BASE_URL` | `http://localhost:8081` |
+| `API_BASE_URL` | `http://localhost:8080` |
+| `WF_EE_LOG_FILE_PATH` | Path to your Warframe `EE.log` file |
 
-- Powershell
+The `EE.log` file is typically located at:
+- **Windows:** `%LOCALAPPDATA%/Warframe/EE.log`
 
-  ```bash
-  docker run --rm -p 8081:8081 --name warframe-message-notifier -v $env:LocalAppData/Warframe/EE.log:/tmp/warframe/EE.log ghcr.io/jamess-lucass/warframe-message-notifier-client:main
-  ```
+### 2. Run the project
 
-- Command Prompt
+#### Docker Compose
 
-  ```bash
-  docker run --rm -p 8081:8081 --name warframe-message-notifier -v %LOCALAPPDATA%/Warframe/EE.log:/tmp/warframe/EE.log ghcr.io/jamess-lucass/warframe-message-notifier-client:main
-  ```
+```bash
+docker compose up -d --build
+```
 
-### From executable
+Or using the Makefile:
 
-1. Download the executable from your desired release version [here](https://github.com/Jamess-Lucass/warframe-message-notifier/releases)
+```bash
+make compose
+```
 
-2. Run the executable.
+#### Pre-built images from GHCR
 
-   > You will need to set the environment variable `WF_EE_LOG_FILE_PATH` so the app knows what log file to read.
+```bash
+# Terminal 1 - server
+docker run --rm -p 8080:8080 --env-file .env \
+  -e CLIENT_API_BASE_URL=http://localhost:8081 \
+  -e DISCORD_BOT_REDIRECT_URI=http://localhost:8080/api/v1/discord/authorize/callback \
+  ghcr.io/jamess-lucass/warframe-message-notifier-server:main
+```
 
-- Powershell
+**Powershell:**
 
-  ```bash
-  $env:WF_EE_LOG_FILE_PATH="$env:LocalAppData/Warframe/EE.log"; .\warframe-message-notifier.exe
-  ```
+```bash
+# Terminal 2 - client
+docker run --rm -p 8081:8081 \
+  -e API_BASE_URL=http://host.docker.internal:8080 \
+  -v $env:LocalAppData/Warframe/EE.log:/tmp/warframe/EE.log \
+  ghcr.io/jamess-lucass/warframe-message-notifier-client:main
+```
 
-- Command Prompt
+**Command Prompt:**
 
-  ```bash
-  set "WF_EE_LOG_FILE_PATH=%LOCALAPPDATA%/Warframe/EE.log" && warframe-message-notifier.exe
-  ```
+```bash
+# Terminal 2 - client
+docker run --rm -p 8081:8081 \
+  -e API_BASE_URL=http://host.docker.internal:8080 \
+  -v %LOCALAPPDATA%/Warframe/EE.log:/tmp/warframe/EE.log \
+  ghcr.io/jamess-lucass/warframe-message-notifier-client:main
+```
 
-## How to use
+#### Without Docker
 
-> Please complete the 'Setup' section first. This assumes you have the app running.
+Requires [Go 1.26+](https://go.dev/dl/) and the [`dotenv`](https://github.com/joho/godotenv) CLI.
 
-1. Authenticate with discord by navigating to the URL presented in the command prompt, this will be presented after the text "Please authenticate with discord via: \<URL>".
+```bash
+# Terminal 1 - server
+make server
 
-   > You need to authenticate with discord so the application knows who to send the Discord DM to.
+# Terminal 2 - client
+make client
+```
 
-2. Wait to receive a direct message in game and you'll be sent a direct message on Discord notifying you :)
+### 3. Authenticate with Discord
+
+Open the URL printed in the client logs:
+
+```
+Please authenticate with Discord via: http://localhost:8080/api/v1/discord/authorize
+```
+
+Authorize with Discord and you're done. The client will now watch your log file and send you a Discord DM when you receive an in-game message.
 
 ## Updating
 
 ### Docker
 
-1. Pull the latest image
-
-   ```bash
-   docker pull ghcr.io/jamess-lucass/warframe-message-notifier-client:main
-   ```
+```bash
+docker compose pull
+docker compose up -d
+```
 
 ### Executable
 
-1. Download the new release version for your operating system.
-
-2. Run the new version following the [From executable](#from-executable) section.
+Download the new release version from [releases](https://github.com/Jamess-Lucass/warframe-message-notifier/releases) and run it with the required environment variables set.

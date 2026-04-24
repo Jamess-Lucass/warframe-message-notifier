@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,104 +11,247 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/go-playground/validator/v10"
 )
 
-// https://discord.com/developers/docs/resources/channel#create-message-jsonform-params
 type SendChannelMessageRequest struct {
-	Content string `json:"content" validate:"required,max=2000"`
+	Content string `json:"content"`
 }
 
 type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-var apiBaseUrl string
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+}
 
-/*
-This is the regex for detecting the event in which the a tab is added to the chat window.
-To detect if this was a player message tab DE prepend 'F' to the username so we can be certain
-it was a player direct message.
-*/
-var r = regexp.MustCompile("(Script \\[Info\\]: ChatRedux\\.lua: ChatRedux::AddTab: Adding tab with channel name: F)(.+)( to index.+)")
+type tokenState struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    time.Time
+}
 
-var discordBearerToken = ""
+func newTokenState(resp *TokenResponse) *tokenState {
+	return &tokenState{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second),
+	}
+}
+
+func (t *tokenState) needsRefresh() bool {
+	return time.Until(t.ExpiresAt) < 60*time.Second
+}
+
+type config struct {
+	APIBaseURL string `validate:"required"`
+	EELogPath  string `validate:"required"`
+}
+
+func loadConfig() (*config, error) {
+	cfg := &config{
+		APIBaseURL: os.Getenv("API_BASE_URL"),
+		EELogPath:  os.Getenv("WF_EE_LOG_FILE_PATH"),
+	}
+
+	if err := validator.New().Struct(cfg); err != nil {
+		return nil, fmt.Errorf("missing required environment variables: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// Regex for detecting the event when a tab is added to the chat window.
+// DE prepends 'F' to the username for player direct messages.
+var chatTabRegex = regexp.MustCompile(`(Script \[Info\]: ChatRedux\.lua: ChatRedux::AddTab: Adding tab with channel name: F)(.+)( to index.+)`)
+
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 func main() {
-	fmt.Println("Starting!")
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	// This is added because when we use 'go build' we inject a build-time variable into apiBaseUrl
-	// so it won't be empty string, however, when using docker, we want to get this from the
-	// environment variable
-	if apiBaseUrl == "" {
-		apiBaseUrl = os.Getenv("API_BASE_URL")
+func run() error {
+	log.Println("Starting!")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 
-	http.HandleFunc("/api/v1/oauth/token", func(w http.ResponseWriter, r *http.Request) {
-		discordBearerToken = r.URL.Query().Get("token")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-		w.WriteHeader(200)
-		w.Write([]byte("Successful! You may close this tab and navigate back to your command line."))
-		return
+	tokenCh := make(chan *TokenResponse, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			http.Error(w, "Missing code parameter", http.StatusBadRequest)
+			return
+		}
+
+		token, err := exchangeAuthCode(cfg.APIBaseURL, code)
+		if err != nil {
+			log.Printf("failed to exchange auth code: %v", err)
+			http.Error(w, "Failed to exchange auth code", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("Successful! You may close this tab and navigate back to your command line.")); err != nil {
+			log.Printf("failed to write response: %v", err)
+		}
+
+		select {
+		case tokenCh <- token:
+		default:
+		}
 	})
 
+	server := &http.Server{Addr: ":8081", Handler: mux}
 	go func() {
-		log.Fatal(http.ListenAndServe(":8081", nil))
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server error: %v", err)
+		}
 	}()
 
-	eeLogPath := os.Getenv("WF_EE_LOG_FILE_PATH")
-	if eeLogPath == "" {
-		log.Fatal("environment variable 'WF_EE_LOG_FILE_PATH' is not set")
+	// Replace 'host.docker.internal' with 'localhost' for display only --
+	// the user accesses this from the host machine, not inside the container.
+	displayURL := strings.ReplaceAll(cfg.APIBaseURL, "host.docker.internal", "localhost")
+	log.Printf("Please authenticate with Discord via: %s/api/v1/discord/authorize", displayURL)
+
+	// Block until we receive a token or the context is cancelled.
+	var token *tokenState
+	select {
+	case resp := <-tokenCh:
+		token = newTokenState(resp)
+		log.Println("Successfully authenticated with Discord.")
+	case <-ctx.Done():
+		log.Println("Shutting down before authentication completed.")
+		shutdownServer(server)
+		return nil
 	}
 
-	file, err := os.Open(eeLogPath)
+	file, err := os.Open(cfg.EELogPath)
 	if err != nil {
-		log.Fatalf("error occured while opening file: %v", err)
+		return fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("error closing file: %v", err)
+		}
+	}()
 
-	// We want to replace 'host.docker.internal' with localhost as the user needs to navigate to this
-	// outside of the container, accessing host.docker.internal on the host machine will not work.
-	// We need to keep this value as 'host.docker.internal' for the rest of the program,
-	// as this is used for http requests from inside the contianer.
-	fmt.Printf("Please authenticate with discord via: %s/api/v1/discord/authorize\n", strings.ReplaceAll(apiBaseUrl, "host.docker.internal", "localhost"))
-
-	// Wait for user to authenticate with discord
-	for discordBearerToken == "" {
-		time.Sleep(1 * time.Second)
-		continue
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("error seeking to end of file: %w", err)
 	}
-
-	fmt.Println("Successfully authenticated with Discord.")
 
 	reader := bufio.NewReader(file)
-	file.Seek(0, io.SeekEnd)
+	log.Println("Watching log file for incoming messages...")
+
 	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Shutting down...")
+			shutdownServer(server)
+			return nil
+		default:
+		}
+
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				time.Sleep(1 * time.Second)
 				continue
-			} else {
-				fmt.Printf("error occured while reading line: %v", err)
-				break
 			}
+			return fmt.Errorf("error reading line: %w", err)
 		}
 
-		if r.MatchString(line) {
-			matches := r.FindStringSubmatch(line)
+		if chatTabRegex.MatchString(line) {
+			matches := chatTabRegex.FindStringSubmatch(line)
 			username := removeNonPrintableCharacters(matches[2])
+			log.Printf("Received DM from %s", username)
 
-			fmt.Printf("Received DM from %s\n", username)
+			if token.needsRefresh() {
+				log.Println("Access token expiring soon, refreshing...")
+				resp, err := refreshToken(cfg.APIBaseURL, token.RefreshToken)
+				if err != nil {
+					log.Printf("failed to refresh token: %v", err)
+					continue
+				}
+				token = newTokenState(resp)
+			}
 
-			if err := sendDiscordMessage(discordBearerToken, username); err != nil {
-				fmt.Println(err.Error())
+			if err := sendDiscordMessage(cfg.APIBaseURL, token.AccessToken, username); err != nil {
+				log.Printf("error sending Discord message: %v", err)
 			}
 		}
 	}
+}
+
+func shutdownServer(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("error shutting down HTTP server: %v", err)
+	}
+}
+
+func postJSON(url string, body any) (*TokenResponse, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("error closing response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		errResp := ErrorResponse{}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return nil, fmt.Errorf("request failed with status %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("request failed: %s", errResp.Message)
+	}
+
+	tokenResp := TokenResponse{}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &tokenResp, nil
+}
+
+func exchangeAuthCode(apiBaseUrl, code string) (*TokenResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/oauth/exchange", apiBaseUrl)
+	return postJSON(url, map[string]string{"code": code})
+}
+
+func refreshToken(apiBaseUrl, refreshTok string) (*TokenResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/oauth/refresh", apiBaseUrl)
+	return postJSON(url, map[string]string{"refresh_token": refreshTok})
 }
 
 func removeNonPrintableCharacters(val string) string {
@@ -119,40 +263,41 @@ func removeNonPrintableCharacters(val string) string {
 	}, val)
 }
 
-func sendDiscordMessage(token string, username string) error {
-	content := SendChannelMessageRequest{Content: fmt.Sprintf("You received a new direct message from __**%s**__", username)}
+func sendDiscordMessage(apiBaseUrl, accessToken, username string) error {
+	content := SendChannelMessageRequest{
+		Content: fmt.Sprintf("You received a new direct message from __**%s**__", username),
+	}
 
 	body, err := json.Marshal(content)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/v1/discord/channels/@me/messages", apiBaseUrl)
-	request, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	request.Header.Add("Content-Type", "application/json")
-	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 
-	client := &http.Client{}
-	res, err := client.Do(request)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("request failed: %w", err)
 	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode >= 400 {
-		errorMessage := &ErrorResponse{}
-
-		err := json.NewDecoder(res.Body).Decode(&errorMessage)
-		if err != nil {
-			return err
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("error closing response body: %v", err)
 		}
+	}()
 
-		return fmt.Errorf("error occured while sending discord message: %s. Please ensure you have at least one mutual server with the Discord Bot.", errorMessage.Message)
+	if resp.StatusCode >= 400 {
+		errResp := ErrorResponse{}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return fmt.Errorf("request failed with status %d", resp.StatusCode)
+		}
+		return fmt.Errorf("failed to send discord message: %s. Please ensure you have at least one mutual server with the Discord Bot", errResp.Message)
 	}
 
 	return nil
