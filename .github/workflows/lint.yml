@@ -33,13 +33,13 @@ jobs:
           go vet ./server/...
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           working-directory: server
 
       - name: Run golangci-lint (client)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           working-directory: client
